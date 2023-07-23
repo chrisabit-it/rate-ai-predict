@@ -9,6 +9,7 @@ import seaborn as sns
 from keras.layers import LSTM, Dropout, Dense
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.models import Model, Sequential
+from keras.utils import plot_model
 from pandas import read_json, DataFrame, Series
 from sklearn.metrics import mean_absolute_error
 from sklearn.preprocessing import MinMaxScaler
@@ -73,18 +74,16 @@ class TrainRatePredict:
 		return self._rate_df
 
 	@staticmethod
-	def _calc_bolling(bol_df: DataFrame, window: int):
-		bol_df['TP'] = (bol_df['Close'] + bol_df['Low'] + bol_df['High']) / 3
-		bol_df['STD'] = bol_df['TP'].rolling(window).std()
-		bol_df['MATP'] = bol_df['TP'].rolling(window).mean()
-
-		bol_df['BOLU'] = bol_df['MATP'] + (2.0 * bol_df['STD'])
-		bol_df['BOLD'] = bol_df['MATP'] - (2.0 * bol_df['STD'])
-		bol_df['BOPB'] = (bol_df['TP'] - bol_df['BOLU']) / (bol_df['BOLU'] - bol_df['BOLD']) + 1.
-		bol_df['BOPBU'] = 1.
-		bol_df['BOPBD'] = 0.
-		bol_df['BOBW'] = (bol_df['BOLU'] - bol_df['BOLD']) / bol_df['MATP']
-		bol_df['BOBW'] = bol_df['BOBW']
+	def _calc_bolling(candle_df: DataFrame, window: int):
+		candle_df['TP'] = (candle_df['Close'] + candle_df['Low'] + candle_df['High']) / 3
+		candle_df['STD'] = candle_df['TP'].rolling(window).std()
+		candle_df['MATP'] = candle_df['TP'].rolling(window).mean()  # Rollierender Mittelwert
+		candle_df['BOLU'] = candle_df['MATP'] + (2.0 * candle_df['STD'])
+		candle_df['BOLD'] = candle_df['MATP'] - (2.0 * candle_df['STD'])
+		candle_df['BOPB'] = (candle_df['TP'] - candle_df['BOLU']) / (candle_df['BOLU'] - candle_df['BOLD']) + 1.
+		candle_df['BOPBU'] = 1.
+		candle_df['BOPBD'] = 0.
+		candle_df['BOBW'] = (candle_df['BOLU'] - candle_df['BOLD']) / candle_df['MATP']  # Bandweite
 
 	@staticmethod
 	def _calc_rsi(candles_df: DataFrame, window: int):
@@ -161,15 +160,10 @@ class TrainRatePredict:
 
 		plot_df = self._rate_df.tail(tail_len)
 		filtered_plot_df = plot_df[self._features]
-		fig, ax = plt.subplots(nrows=filtered_plot_df.shape[1] + 1, sharex=1, figsize=(16, 8))
-		plt.ylabel(self._symbol, fontsize=18)
-		sns.set_palette(["#090364", "#1960EF", "#EF5919"])
+		fig, ax = plt.subplots(nrows=filtered_plot_df.shape[1], sharex=1, figsize=(10, 4))
 
 		for i, ax in enumerate(fig.axes):
-			if i == 0:
-				sns.lineplot(data=plot_df[[self._rate_col, 'BOLU', 'BOLD']], ax=ax)
-			else:
-				sns.lineplot(data=filtered_plot_df.iloc[:, i - 1], ax=ax)
+			sns.lineplot(data=filtered_plot_df.iloc[:, i], ax=ax)
 			ax.tick_params(axis="x", rotation=30, labelsize=10, length=0)
 			ax.xaxis.set_major_locator(mdates.AutoDateLocator())
 
@@ -233,6 +227,10 @@ class TrainRatePredict:
 
 		self._model.compile(optimizer=self._optimizer, loss=self._loss)
 
+	def gen_model_plot(self, model_name):
+		assert self._model is not None
+		plot_model(model=self._model, to_file=f'{model_name}.png', show_shapes=True)
+
 	def train(self):
 		assert self._symbol is not None
 		assert self._model is not None
@@ -265,13 +263,11 @@ class TrainRatePredict:
 		assert self._symbol is not None
 		assert self._model is not None
 
-		fig, ax = plt.subplots(figsize=(30, 5), sharex=True)
+		# plt.subplots(figsize=(50, 8))
 		sns.lineplot(data=self._history.history['loss'])
 		plt.title(f'Model loss {self._symbol}')
 		plt.ylabel('Loss')
 		plt.xlabel('Epoch')
-		# ax.xaxis.set_major_locator(plt.MaxNLocator(self._epochs))
-		plt.legend(['Train', 'Test'], loc='upper left')
 		plt.grid()
 		plt.show()
 
@@ -320,9 +316,6 @@ class TrainRatePredict:
 		test_df: DataFrame = DataFrame(y_test).rename(columns={0: 'y_test'})
 		test_df['y_pred'] = y_pred
 		test_df['delta'] = (test_df['y_pred'] / test_df['y_test'] - 1.) * 100.
-		test_df['x_last'] = Series(x_test[:, -1, index_rate])
-		test_df['trend'] = (test_df['y_pred'] - test_df['x_last']) * (test_df['y_test'] - test_df['x_last'])
-		test_df['signum'] = np.sign(test_df['trend'])
 
 		plot_df = test_df.tail(tail_len).copy()
 		_, ax = plt.subplots(figsize=(16, 8))
@@ -331,13 +324,10 @@ class TrainRatePredict:
 		sns.set_palette(["#090364", "#1960EF"])
 		sns.lineplot(data=plot_df[['y_pred', 'y_test']], linewidth=1.0, dashes=False, ax=ax)
 
-		for col_name in ['delta', 'trend', 'signum']:
-			self._plot_bar(plot_df, col_name)
+		self._plot_bar(plot_df, 'delta')
 
 		plt.legend()
 		plt.show()
-
-		print(f'Mean Signum: {test_df["signum"].mean():.2f}')
 
 	def persist(self):
 		assert self._symbol is not None
